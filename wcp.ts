@@ -89,6 +89,9 @@ function main(watchdir: string, job: Map<string, Job>) {
         if (job.has(fpath)) {
             let workdir = path.dirname(fpath);
             console.log(filename + ' => ' + job.get(fpath).dst);
+            if (filename.endsWith('.js')) {
+                fs.writeFileSync(job.get(fpath).dst, "document.body.innerHTML= 'js 未準備就緒';", 'utf-8');
+            }
             let src = new Promise<string>((resolve, reject) => resolve(fs.readFileSync(fpath, 'utf-8')));
             if (filename.endsWith('.scss')) {
                 src = src.then(sass(workdir));
