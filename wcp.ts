@@ -5,8 +5,8 @@
 import * as fs from 'fs';
 import * as child_process from 'child_process';
 import * as path from 'path';
-import {curry} from 'ramda';
-import {Jsonable, Optional, Result, liftA2} from './m/types';
+import {curry, head} from 'ramda';
+import {Jsonable, Optional, Result, liftA3} from './m/types';
 
 class Job {
     src: string;
@@ -83,7 +83,7 @@ function loadIni(watchdir: string): Optional<Map<string, Job>> {
     }
 }
 
-function main(watchdir: string, job: Map<string, Job>) {
+function main(watchdir: string, job: Map<string, Job>, needUglify: boolean) {
     return fs.watch(watchdir, <any>{recursive: true}, (event, filename) => {
         let fpath = path.resolve(watchdir, filename);
         if (job.has(fpath)) {
@@ -96,7 +96,10 @@ function main(watchdir: string, job: Map<string, Job>) {
             if (filename.endsWith('.scss')) {
                 src = src.then(sass(workdir));
             } else if (filename.endsWith('.js')) {
-                src = src.then(browserify(workdir)).then(uglify(workdir));
+                src = src.then(browserify(workdir));
+                if (needUglify) {
+                    src = src.then(uglify(workdir));
+                }
             } else {
                 src = src.then(x => new Promise<string>((resolve, reject) => reject('不支援的格式 ' + filename)));
             }
@@ -107,6 +110,9 @@ function main(watchdir: string, job: Map<string, Job>) {
     });
 }
 
-let watchdir = Optional.of(process.argv.slice(2)[0]);
-liftA2(main, o2e(watchdir, '請指定工作目錄'), o2e(watchdir.chain(loadIni), '找不到 wcp.ini 檔'))
+let args = process.argv.slice(2);
+let options = args.filter(arg => arg.startsWith("-"));
+let needUglify = options.some(o => o == "-u");
+let watchdir = Optional.of(head(args.filter(arg => !arg.startsWith("-"))));
+liftA3(main, o2e(watchdir, '請指定工作目錄'), o2e(watchdir.chain(loadIni), '找不到 wcp.ini 檔'), Result.ok(needUglify))
 .either(err => console.log(err), _ => console.log('開始...'));
