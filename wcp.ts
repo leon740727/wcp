@@ -63,9 +63,9 @@ function uglify() {
     return curry(exec).apply(null, arguments);
 }
 
-function sass(workdir: string, content: string): Promise<string>;
-function sass(workdir: string): (content: string) => Promise<string>;
-function sass() {
+function sassify(workdir: string, content: string): Promise<string>;
+function sassify(workdir: string): (content: string) => Promise<string>;
+function sassify() {
     function exec(workdir: string, content: string) {
         return pipe(content, 'sass', ['-s', '--scss'], workdir);
     }
@@ -83,29 +83,33 @@ function loadIni(watchdir: string): Optional<Map<string, Job>> {
     }
 }
 
+function compile(src: string, dst: string, needUglify: boolean) {
+    let workdir = path.dirname(src);
+    console.log(src + ' => ' + dst);
+    if (src.endsWith('.js')) {
+        fs.writeFileSync(dst, "document.body.innerHTML= 'js 未準備就緒';", 'utf-8');
+    }
+    let data = new Promise<string>((resolve, reject) => resolve(fs.readFileSync(src, 'utf-8')));
+    if (src.endsWith('.scss')) {
+        data = data.then(sassify(workdir));
+    } else if (src.endsWith('.js')) {
+        data = data.then(browserify(workdir));
+        if (needUglify) {
+            data = data.then(uglify(workdir));
+        }
+    } else {
+        data = data.then(x => new Promise<string>((resolve, reject) => reject(`不支援的格式:${src}`)));
+    }
+    data
+    .then(res => fs.writeFileSync(dst, res, 'utf-8'))
+    .catch(err => console.log(err));
+}
+
 function main(watchdir: string, job: Map<string, Job>, needUglify: boolean) {
     return fs.watch(watchdir, <any>{recursive: true}, (event, filename) => {
         let fpath = path.resolve(watchdir, filename);
         if (job.has(fpath)) {
-            let workdir = path.dirname(fpath);
-            console.log(filename + ' => ' + job.get(fpath).dst);
-            if (filename.endsWith('.js')) {
-                fs.writeFileSync(job.get(fpath).dst, "document.body.innerHTML= 'js 未準備就緒';", 'utf-8');
-            }
-            let src = new Promise<string>((resolve, reject) => resolve(fs.readFileSync(fpath, 'utf-8')));
-            if (filename.endsWith('.scss')) {
-                src = src.then(sass(workdir));
-            } else if (filename.endsWith('.js')) {
-                src = src.then(browserify(workdir));
-                if (needUglify) {
-                    src = src.then(uglify(workdir));
-                }
-            } else {
-                src = src.then(x => new Promise<string>((resolve, reject) => reject('不支援的格式 ' + filename)));
-            }
-            src
-            .then(res => fs.writeFileSync(job.get(fpath).dst, res, 'utf-8'))
-            .catch(err => console.log(err));
+            compile(fpath, job.get(fpath).dst, needUglify);
         }
     });
 }

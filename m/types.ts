@@ -19,6 +19,12 @@ export class Optional<T> {
     static empty() {
         return new Optional(null);
     }
+    jsonable(transformer: (data: T) => Jsonable): Jsonable {
+        return this.value == null ? null : transformer(this.value);
+    }
+    static restore<T>(data: Jsonable, transformer: (data: Jsonable) => T): Optional<T> {
+        return Optional.of(data).map(transformer);
+    }
     is_present() {
         return this.value !== null && this.value !== undefined;
     }
@@ -29,11 +35,21 @@ export class Optional<T> {
     or_else(others: T) {
         return this.is_present() ? this.value : others;
     }
+    or_exec(func: () => T) {
+        // 無論 Optional 是否有值，or_else 裡面的表達式都會被求值
+        // 例如: doc.or_else(load_default()) 不論 doc 是否有值，load_default 都會執行
+        // 如果不希望 or_else 裡面的表達式被無謂求值，就用 or_exec
+        return this.is_present() ? this.value : func();
+    }
     map<R>(f: (a: T) => R): Optional<R> {
         return this.is_present() ? Optional.of(f(this.value)) : Optional.empty();
     }
     chain<R>(f: (a: T) => Optional<R>): Optional<R> {
         return this.is_present() ? f(this.value) : Optional.empty();
+    }
+
+    static cat<T>(list: Optional<T>[]): T[] {
+        return list.filter(i => i.is_present()).map(i => i.get());
     }
 }
 
@@ -52,6 +68,20 @@ export class Result<E, T> {
     static fail<E,T>(e: E) {
         return new Result(false, e, null);
     }
+    jsonable(errorT: (error: E) => Jsonable, valueT: (data: T) => Jsonable): Jsonable {
+        if (this.ok) {
+            return [null, valueT(this.value)];
+        } else {
+            return [errorT(this.error), null];
+        }
+    }
+    static restore<E, T>(data: Jsonable, errorT: (error: Jsonable) => E, valueT: (data: Jsonable) => T): Result<E, T> {
+        if (data[0] === null) {
+            return Result.ok(valueT(data[1]));
+        } else {
+            return Result.fail(errorT(data[0]));
+        }
+    }
     map<R>(f:(v:T)=>R): Result<E,R> {
         if (this.ok) {
             return Result.ok(f(this.value));
@@ -65,6 +95,9 @@ export class Result<E, T> {
         } else {
             return Result.fail(this.error);
         }
+    }
+    get fail() {
+        return ! this.ok;
     }
     get() {
         _assert(this.ok, "Result 不 ok");
@@ -80,6 +113,10 @@ export class Result<E, T> {
         } else {
             return f(this.error);
         }
+    }
+
+    static cat<E,T>(list: Result<E,T>[]): T[] {
+        return list.filter(r => r.ok).map(r => r.get());
     }
 }
 
@@ -123,6 +160,75 @@ export class IO<T> {
     chain<R>(f: (p:T) => IO<R>) {
         let o = new IO(() => f(this.exec()));
         return o.exec();
+    }
+}
+
+export function makePromise<T>(data: T) {
+    return new Promise<T>((resolve, reject) => resolve(data));
+}
+
+export class PromiseOptional<T> {
+    data: Promise<Optional<T>>;
+    constructor(data: Promise<Optional<T>>) {
+        this.data = data;
+    }
+    static make<T>(data: Promise<Optional<T>>) {
+        return new PromiseOptional(data);
+    }
+    map<R>(f: (p: T) => R): PromiseOptional<R> {
+        return new PromiseOptional(this.data.then(d => d.map(f)));
+    }
+    chain<R>(f: (p: T) => PromiseOptional<R>): PromiseOptional<R>;
+    chain<R>(f: (p: T) => Promise<Optional<R>>): PromiseOptional<R>;
+    chain<R>(f: (p: T) => any): PromiseOptional<R> {
+        function mapper(p: T): Promise<Optional<R>> {
+            let res = f(p);
+            if (res instanceof PromiseOptional) {
+                return res.data;
+            } else {
+                return res;
+            }
+        }
+        let res = this.data.then(d =>
+            d.map(mapper)
+             .or_else(makePromise(Optional.empty())));
+        return new PromiseOptional(res);
+    }
+    or_else(other: T): Promise<T> {
+        return this.data.then(d => d.is_present() ? d.get() : other);
+    }
+}
+
+export class PromiseResult<E, T> {
+    data: Promise<Result<E, T>>;
+    constructor(data: Promise<Result<E, T>>) {
+        this.data = data;
+    }
+    static make<E, T>(data: Promise<Result<E, T>>) {
+        return new PromiseResult(data);
+    }
+    map<R>(f: (p: T) => R): PromiseResult<E, R> {
+        return new PromiseResult(this.data.then(d => d.map(f)));
+    }
+    chain<R>(f: (p: T) => PromiseResult<E, R>): PromiseResult<E, R>;
+    chain<R>(f: (p: T) => Promise<Result<E, R>>): PromiseResult<E, R>
+    chain<R>(f: (p: T) => any): PromiseResult<E, R> {
+        function mapper(p: T): Promise<Result<E, R>> {
+            let res = f(p);
+            if (res instanceof PromiseResult) {
+                return res.data;
+            } else {
+                return res;
+            }
+        }
+        let res = this.data.then(d =>
+            d.map(mapper).either(
+                err => makePromise(<Result<E,R>>Result.fail(err)),
+                data => data));
+        return new PromiseResult(res);
+    }
+    either<R>(f:(e:E)=>R, g:(v:T)=>R): Promise<R> {
+        return this.data.then(r => r.either(f, g));
     }
 }
 
@@ -172,4 +278,12 @@ export function liftA3<A,B,C,D>(fun:(a:A, b:B, c:C)=>D, a:IO<A>, b:IO<B>, c:IO<C
 export function liftA3<A,B,C,D>(fun:(a:A, b:B, c:C)=>D, a, b, c) {
     let f = <(a:A,b:B)=>(c:C)=>D> curry(fun);
     return (<any>liftA2(f,a,b)).chain(r => c.map(r));
+}
+export function liftA4<A,B,C,D,E>(fun:(a:A, b:B, c:C, d:D)=>E, a:Optional<A>, b:Optional<B>, c:Optional<C>, d: Optional<D>):Optional<E>;
+export function liftA4<A,B,C,D,E,F>(fun:(a:A, b:B, c:C, d:D)=>E, a:Result<F,A>, b:Result<F,B>, c:Result<F,C>, d:Result<F,D>):Result<F,E>;
+export function liftA4<A,B,C,D,E>(fun:(a:A, b:B, c:C, d:D)=>E, a:List<A>, b:List<B>, c:List<C>, d: Optional<D>):List<E>;
+export function liftA4<A,B,C,D,E>(fun:(a:A, b:B, c:C, d:D)=>E, a:IO<A>, b:IO<B>, c:IO<C>, d: Optional<D>):IO<E>;
+export function liftA4<A,B,C,D,E>(fun:(a:A, b:B, c:C, d:D)=>E, a, b, c, d) {
+    let f = <(a:A,b:B,c:C)=>(d:D)=>E> curry(fun);
+    return (<any>liftA3(f,a,b,c)).chain(r => d.map(r));
 }
