@@ -8,6 +8,7 @@ import * as path from 'path';
 import {curry, head} from 'ramda';
 import {Jsonable, Optional, Result, liftA3} from './m/types';
 import * as scss from "./m/type-scss";
+import * as js from "./m/type-js";
 
 class Job {
     src: string;
@@ -116,6 +117,11 @@ function main(watchdir: string, job: Map<string, Job>, needUglify: boolean) {
             Array.from(job.values())
             .filter(j => scss.isa(j.src))
             .filter(j => scss.dependencies(j.src).indexOf(fpath) != -1)
+            .forEach(j => compile(j.src, j.dst, needUglify));
+        } else if (js.isa(fpath)) {
+            Array.from(job.values())
+            .filter(j => js.isa(j.src) && fs.existsSync(j.src))
+            .filter(j => js.dependencies(j.src).indexOf(fpath) != -1)
             .forEach(j => compile(j.src, j.dst, needUglify));
         }
     });
