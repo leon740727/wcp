@@ -7,6 +7,7 @@ import * as child_process from 'child_process';
 import * as path from 'path';
 import {curry, head} from 'ramda';
 import {Jsonable, Optional, Result, liftA3} from './m/types';
+import * as scss from "./m/type-scss";
 
 class Job {
     src: string;
@@ -110,6 +111,12 @@ function main(watchdir: string, job: Map<string, Job>, needUglify: boolean) {
         let fpath = path.resolve(watchdir, filename);
         if (job.has(fpath)) {
             compile(fpath, job.get(fpath).dst, needUglify);
+        } else if (scss.isa(fpath)) {
+            // 被依賴的 .scss 有變動時，相關的 Job 也要重新 compile
+            Array.from(job.values())
+            .filter(j => scss.isa(j.src))
+            .filter(j => scss.dependencies(j.src).indexOf(fpath) != -1)
+            .forEach(j => compile(j.src, j.dst, needUglify));
         }
     });
 }
